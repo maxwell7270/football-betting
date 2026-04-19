@@ -1,0 +1,16 @@
+RAPIDAPI_KEY: "005da3cc01msh9348fccdbd80012p1a0206jsnca720bef13c5"
+API_FOOTBALL_KEY: "3d7f73d466e7abe268c4916f726e6ea3"
+ODDS_API_IO_KEY: "c6a2d872752fd1ae6cb66070214623bc06d01a595e3f444ec9703bef731c34f2"
+SPORTSGAMEODDS_API_KEY: "a95001b0cc709050818e8ebf34d9cd01"
+
+LEAGUES:
+  39: "Premier League"
+  40: "Championship"
+  78: "Bundesliga"
+  140: "La Liga"
+  135: "Serie A"
+  61: "Ligue 1"
+  88: "Eredivisie"
+
+MIN_EDGE: 0.025
+TIMEZONE: "Europe/Zurich"
