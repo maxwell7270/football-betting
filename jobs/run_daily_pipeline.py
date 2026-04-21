@@ -4,7 +4,9 @@ API-Football is paused while the monthly quota is exhausted.
 """
 from __future__ import annotations
 
+import csv
 import sys
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -88,7 +90,8 @@ def main() -> int:
 
     # 4. Value-bet detection (1x2 only, consensus-based).
     value_results = analyze_value(odds_by_fixture)
-    value_lines_logged = 0
+    fixtures_by_id = {fx.fixture_id: fx for fx in fixtures}
+    value_rows: list[dict] = []
     for fixture_id, analysis in value_results.items():
         for entry in analysis["per_bookmaker"]:
             if entry["edge"] <= config.value_min_edge:
@@ -99,9 +102,55 @@ def main() -> int:
                 fixture_id, entry["bookmaker"], entry["selection"],
                 entry["odds"], entry["fair_odds"], entry["edge"],
             )
-            value_lines_logged += 1
-    if value_lines_logged == 0:
+            value_rows.append({
+                "fixture_id": fixture_id,
+                "market": analysis["market"],
+                "bookmaker": entry["bookmaker"],
+                "selection": entry["selection"],
+                "odds": entry["odds"],
+                "fair_odds": entry["fair_odds"],
+                "edge": entry["edge"],
+            })
+    if not value_rows:
         log.info("No 1x2 value bets found")
+
+    # 5. Append value bets to CSV (only if there are qualifying rows).
+    if value_rows:
+        csv_path = Path("data/value_bets.csv")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not csv_path.exists()
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        header = [
+            "timestamp", "fixture_id", "league_key", "home_team", "away_team",
+            "kickoff", "market", "bookmaker", "selection", "odds", "fair_odds", "edge",
+        ]
+        with csv_path.open("a", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            if write_header:
+                writer.writerow(header)
+            for r in value_rows:
+                fx = fixtures_by_id.get(r["fixture_id"])
+                league_key = fx.league_key if fx else ""
+                home_team = fx.home_team if fx else ""
+                away_team = fx.away_team if fx else ""
+                kickoff = (
+                    fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M") if fx else ""
+                )
+                writer.writerow([
+                    timestamp,
+                    r["fixture_id"],
+                    league_key,
+                    home_team,
+                    away_team,
+                    kickoff,
+                    r["market"],
+                    r["bookmaker"],
+                    r["selection"],
+                    f"{r['odds']:.2f}",
+                    f"{r['fair_odds']:.2f}",
+                    f"{r['edge']:.4f}",
+                ])
+        log.info("Exported %d value bet(s) to data/value_bets.csv", len(value_rows))
 
     return 0
 
