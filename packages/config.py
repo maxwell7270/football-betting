@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List
 
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-load_dotenv(find_dotenv())
+load_dotenv()
 
 
+# Internal league key -> API-Football league id
 LEAGUE_IDS: Dict[str, int] = {
     "premier_league": 39,
     "bundesliga": 78,
@@ -25,6 +26,16 @@ def _get_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
+    except ValueError:
+        return default
+
+
+def _get_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
     except ValueError:
         return default
 
@@ -48,7 +59,7 @@ def current_season(now: datetime | None = None) -> int:
 
     If current month >= 7 -> current year, otherwise previous year.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.utcnow()
     return now.year if now.month >= 7 else now.year - 1
 
 
@@ -65,6 +76,7 @@ class Config:
     odds_api_io_key: str = ""
     odds_api_io_base_url: str = "https://api.odds-api.io/v3"
     odds_api_io_bookmakers: List[str] = field(default_factory=list)
+    value_min_edge: float = 0.02
     season: int = field(default_factory=current_season)
 
     @property
@@ -84,10 +96,11 @@ def load_config() -> Config:
             "BETTING_LEAGUES",
             ["premier_league", "bundesliga", "la_liga", "serie_a"],
         ),
-        odds_lookahead_days=_get_int("ODDS_LOOKAHEAD_DAYS", 3),
+        odds_lookahead_days=_get_int("ODDS_LOOKAHEAD_DAYS", 7),
         odds_api_io_key=os.getenv("ODDS_API_IO_KEY", ""),
         odds_api_io_base_url=os.getenv(
             "ODDS_API_IO_BASE_URL", "https://api.odds-api.io/v3"
         ),
-        odds_api_io_bookmakers=_get_list("ODDS_API_IO_BOOKMAKERS", ["bet365"]),
+        odds_api_io_bookmakers=_get_list("ODDS_API_IO_BOOKMAKERS", ["Bet365"]),
+        value_min_edge=_get_float("VALUE_MIN_EDGE", 0.02),
     )

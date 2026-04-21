@@ -91,7 +91,7 @@ def main() -> int:
     value_lines_logged = 0
     for fixture_id, analysis in value_results.items():
         for entry in analysis["per_bookmaker"]:
-            if entry["edge"] <= 0.02:
+            if entry["edge"] <= config.value_min_edge:
                 continue
             log.info(
                 "VALUE BET | fixture_id=%d | bookmaker=%s | selection=%s | "
