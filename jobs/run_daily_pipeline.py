@@ -17,6 +17,7 @@ from packages.models import Fixture, OddsQuote  # noqa: E402
 from packages.providers.odds_api_io import OddsApiIoClient  # noqa: E402
 from packages.services.mock_fixtures_service import get_mock_fixtures  # noqa: E402
 from packages.services.odds_service import OddsService  # noqa: E402
+from packages.services.value_service import analyze_value  # noqa: E402
 
 
 def _resolve_tz(name: str) -> ZoneInfo:
@@ -84,6 +85,24 @@ def main() -> int:
         total_quotes += len(quotes)
 
     log.info("Total odds entries fetched: %d", total_quotes)
+
+    # 4. Value-bet detection (1x2 only, consensus-based).
+    value_results = analyze_value(odds_by_fixture)
+    value_lines_logged = 0
+    for fixture_id, analysis in value_results.items():
+        for entry in analysis["per_bookmaker"]:
+            if not entry["is_value"]:
+                continue
+            log.info(
+                "VALUE BET | fixture_id=%d | bookmaker=%s | selection=%s | "
+                "odds=%.2f | fair_odds=%.2f | edge=%.4f",
+                fixture_id, entry["bookmaker"], entry["selection"],
+                entry["odds"], entry["fair_odds"], entry["edge"],
+            )
+            value_lines_logged += 1
+    if value_lines_logged == 0:
+        log.info("No 1x2 value bets found")
+
     return 0
 
 
