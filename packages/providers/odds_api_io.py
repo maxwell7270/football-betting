@@ -116,7 +116,14 @@ def _kickoff_delta_s(fixture: Fixture, event: Dict[str, Any]) -> Optional[float]
 
 
 def _match_confidence(fixture: Fixture, event: Dict[str, Any]) -> Optional[str]:
-    """Return confidence tier if the event matches the fixture, else None."""
+    """Return confidence tier if the event matches the fixture, else None.
+
+    EXACT      — _normalize() alone produces equal names.
+    NORMALIZED — _canonical() stripping was required; no alias used.
+    ALIAS      — alias resolution was required.
+
+    Substring/partial/fuzzy matching is not used.
+    """
     ev_home_raw = str(event.get("home", ""))
     ev_away_raw = str(event.get("away", ""))
     if not ev_home_raw or not ev_away_raw:
@@ -194,12 +201,15 @@ class OddsApiIoClient:
     def _ensure_cache_loaded(self) -> Dict[str, Dict[str, Any]]:
         if self._odds_cache is not None:
             return self._odds_cache
+
         try:
             if ODDS_CACHE_FILE.exists():
                 with ODDS_CACHE_FILE.open("r", encoding="utf-8") as fh:
                     data = json.load(fh)
+
                 if not isinstance(data, dict):
                     raise ValueError(f"cache root is not a dict (got {type(data).__name__})")
+
                 self._odds_cache = data
                 log.info(
                     "odds cache loaded from %s (%d entries)",
@@ -209,6 +219,7 @@ class OddsApiIoClient:
             else:
                 self._odds_cache = {}
                 log.info("odds cache file %s not found — starting empty", ODDS_CACHE_FILE)
+
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             log.warning(
                 "odds cache file %s unreadable (%s) — rebuilding clean",
@@ -216,11 +227,13 @@ class OddsApiIoClient:
                 exc,
             )
             self._odds_cache = {}
+
         return self._odds_cache
 
     def _save_cache(self) -> None:
         if self._odds_cache is None:
             return
+
         try:
             ODDS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with ODDS_CACHE_FILE.open("w", encoding="utf-8") as fh:
@@ -243,26 +256,56 @@ class OddsApiIoClient:
                 )
                 response.raise_for_status()
                 return response.json()
+
             except requests.Timeout as exc:
                 last_error = exc
-                log.warning("Timeout on %s attempt %d/%d", url, attempt, attempts)
+                log.warning("Timeout on %s (attempt %d/%d)", url, attempt, attempts)
+
             except requests.HTTPError as exc:
                 last_error = exc
-                log.warning("HTTP error on %s attempt %d/%d: %s", url, attempt, attempts, exc)
+                log.warning(
+                    "HTTP error on %s attempt %d/%d: %s",
+                    url,
+                    attempt,
+                    attempts,
+                    exc,
+                )
+
             except requests.RequestException as exc:
                 last_error = exc
-                log.warning("Request error on %s attempt %d/%d: %s", url, attempt, attempts, exc)
+                log.warning(
+                    "Request error on %s attempt %d/%d: %s",
+                    url,
+                    attempt,
+                    attempts,
+                    exc,
+                )
 
             if attempt < attempts:
                 time.sleep(min(2 ** (attempt - 1), 5))
 
-        raise OddsApiIoError(f"Failed to GET {url} after {attempts} attempts: {last_error}")
+        raise OddsApiIoError(
+            f"Failed to GET {url} after {attempts} attempts: {last_error}"
+        )
 
     def _find_event_id(self, fixture: Fixture) -> Optional[int]:
         slug = LEAGUE_SLUGS.get(fixture.league_key)
         if not slug:
-            log.warning("No odds-api.io slug for league_key=%s — skipping", fixture.league_key)
+            log.warning(
+                "No odds-api.io slug for league_key=%s — skipping",
+                fixture.league_key,
+            )
             return None
+
+        events_path = f"{self.config.odds_api_io_base_url.rstrip('/')}/events"
+        debug_params = {"sport": "football", "league": slug, "apiKey": "***"}
+        log.debug(
+            "odds-api.io events lookup | league_key=%s slug=%s url=%s params=%s",
+            fixture.league_key,
+            slug,
+            events_path,
+            debug_params,
+        )
 
         try:
             events = self._get("/events", {"sport": "football", "league": slug})
@@ -271,6 +314,12 @@ class OddsApiIoClient:
             return None
 
         if not isinstance(events, list):
+            top_keys: List[str] = list(events.keys()) if isinstance(events, dict) else []
+            log.debug(
+                "odds-api.io /events response is not a list | type=%s top_keys=%s",
+                type(events).__name__,
+                top_keys,
+            )
             log.warning(
                 "match FAILED | fixture=%s vs %s | slug=%s | checked=0 | top_candidates=[]",
                 fixture.home_team,
@@ -282,28 +331,15 @@ class OddsApiIoClient:
         log.debug("odds-api.io /events returned %d events for slug=%s", len(events), slug)
         for i, ev in enumerate(events[:5]):
             if isinstance(ev, dict):
-                log.debug("event[%d] %s", i, _event_summary(ev))
+                log.debug("  event[%d] %s", i, _event_summary(ev))
+            else:
+                log.debug("  event[%d] (non-dict) type=%s", i, type(ev).__name__)
 
         for event in events:
             if not isinstance(event, dict):
                 continue
 
             confidence = _match_confidence(fixture, event)
-
-            log.debug(
-                "MATCH DEBUG | fixture=%s vs %s | raw=%r vs %r | canonical=%r vs %r | "
-                "confidence=%r | event_id=%s | date=%r",
-                fixture.home_team,
-                fixture.away_team,
-                event.get("home"),
-                event.get("away"),
-                _canonical(str(event.get("home", ""))),
-                _canonical(str(event.get("away", ""))),
-                confidence,
-                event.get("id"),
-                event.get("date") or event.get("commence_time"),
-            )
-
             if confidence in (CONF_EXACT, CONF_NORMALIZED, CONF_ALIAS):
                 event_id = event.get("id")
                 if event_id is None:
@@ -311,6 +347,7 @@ class OddsApiIoClient:
 
                 delta = _kickoff_delta_s(fixture, event)
                 delta_min = int(delta / 60) if delta is not None else "?"
+
                 log.info(
                     "match OK | confidence=%s | fixture=%s vs %s | event_id=%s | "
                     "matched=%s vs %s | kickoff_delta=%smin",
@@ -322,6 +359,7 @@ class OddsApiIoClient:
                     event.get("away"),
                     delta_min,
                 )
+
                 self.match_confidence[fixture.fixture_id] = confidence
                 return int(event_id)
 
@@ -345,11 +383,16 @@ class OddsApiIoClient:
                 str(ev.get("away", "")),
             ),
         )
+
         top = [
-            "'" + _canonical(str(ev.get("home", ""))) + "' vs '"
-            + _canonical(str(ev.get("away", ""))) + "'"
+            "'"
+            + _canonical(str(ev.get("home", "")))
+            + "' vs '"
+            + _canonical(str(ev.get("away", "")))
+            + "'"
             for ev in ranked[:3]
         ]
+
         log.warning(
             "match FAILED | fixture=%s vs %s | slug=%s | checked=%d | top_candidates=%s",
             fixture.home_team,
@@ -381,8 +424,10 @@ class OddsApiIoClient:
         if isinstance(cached, dict):
             fetched_at = cached.get("fetched_at")
             cached_payload = cached.get("payload")
+
             if isinstance(fetched_at, (int, float)) and isinstance(cached_payload, dict):
                 age = time.time() - float(fetched_at)
+
                 if 0 <= age < ODDS_CACHE_TTL_SECONDS:
                     log.info(
                         "odds cache HIT | event_id=%s bookmakers=%r age=%.1fs",
@@ -407,26 +452,43 @@ class OddsApiIoClient:
                 )
                 cache.pop(cache_key, None)
         else:
-            log.info("odds cache MISS | event_id=%s bookmakers=%r", event_id, bookmakers_key)
+            log.info(
+                "odds cache MISS | event_id=%s bookmakers=%r",
+                event_id,
+                bookmakers_key,
+            )
 
         if payload is None:
             try:
                 payload = self._get("/odds", params)
             except OddsApiIoError as exc:
-                log.error("Failed to fetch odds for fixture_id=%d: %s", fixture.fixture_id, exc)
+                log.error(
+                    "Failed to fetch odds for fixture_id=%d event_id=%s bookmakers=%r: %s",
+                    fixture.fixture_id,
+                    event_id,
+                    bookmakers_key,
+                    exc,
+                )
                 return []
 
         if not isinstance(payload, dict):
             log.warning(
-                "Unexpected odds payload for fixture_id=%d: %r",
+                "Unexpected odds payload | fixture_id=%d | event_id=%s | bookmakers=%r | type=%s",
                 fixture.fixture_id,
-                type(payload),
+                event_id,
+                bookmakers_key,
+                type(payload).__name__,
             )
             return []
 
         books = payload.get("bookmakers")
         if not isinstance(books, dict) or not books:
-            log.info("No bookmaker odds returned for fixture_id=%d", fixture.fixture_id)
+            log.info(
+                "No bookmaker odds returned | fixture_id=%d | event_id=%s | bookmakers=%r",
+                fixture.fixture_id,
+                event_id,
+                bookmakers_key,
+            )
             return []
 
         if cache_key not in cache:
@@ -443,18 +505,28 @@ def _parse_odds(fixture: Fixture, books: Dict[str, Any]) -> List[OddsQuote]:
     for bookmaker_name, markets in books.items():
         if not isinstance(markets, list):
             continue
+
         for market in markets:
             if not isinstance(market, dict):
                 continue
 
             market_name = str(market.get("name", "")).strip()
             odds_list = market.get("odds")
+
             if not isinstance(odds_list, list) or not odds_list:
                 continue
 
             if market_name.upper() == "ML":
                 quotes.extend(_parse_1x2(fixture, bookmaker_name, odds_list, now))
                 continue
+
+            log.debug(
+                "non-ML market | bookmaker=%s market=%r entries=%d sample=%s",
+                bookmaker_name,
+                market_name,
+                len(odds_list),
+                odds_list[:3],
+            )
 
             if market_name.lower() in {"totals", "over/under", "over under"}:
                 quotes.extend(_parse_ou25(fixture, bookmaker_name, odds_list, now))
@@ -463,18 +535,24 @@ def _parse_odds(fixture: Fixture, books: Dict[str, Any]) -> List[OddsQuote]:
 
 
 def _parse_1x2(
-    fixture: Fixture, bookmaker: str, odds_list: List[Any], now: datetime
+    fixture: Fixture,
+    bookmaker: str,
+    odds_list: List[Any],
+    now: datetime,
 ) -> List[OddsQuote]:
     out: List[OddsQuote] = []
     entry = odds_list[0] if odds_list and isinstance(odds_list[0], dict) else None
+
     if entry is None:
         return out
 
     for selection in ("home", "draw", "away"):
         raw = entry.get(selection)
         price = _to_float(raw)
+
         if price is None:
             continue
+
         out.append(
             OddsQuote(
                 fixture_id=fixture.fixture_id,
@@ -486,13 +564,18 @@ def _parse_1x2(
                 fetched_at_utc=now,
             )
         )
+
     return out
 
 
 def _parse_ou25(
-    fixture: Fixture, bookmaker: str, odds_list: List[Any], now: datetime
+    fixture: Fixture,
+    bookmaker: str,
+    odds_list: List[Any],
+    now: datetime,
 ) -> List[OddsQuote]:
     out: List[OddsQuote] = []
+
     for entry in odds_list:
         if not isinstance(entry, dict):
             continue
@@ -504,13 +587,16 @@ def _parse_ou25(
             or entry.get("total")
             or entry.get("point")
         )
+
         if line is None or abs(line - 2.5) > 1e-6:
             continue
 
         for selection in ("over", "under"):
             price = _to_float(entry.get(selection))
+
             if price is None:
                 continue
+
             out.append(
                 OddsQuote(
                     fixture_id=fixture.fixture_id,
@@ -522,12 +608,14 @@ def _parse_ou25(
                     fetched_at_utc=now,
                 )
             )
+
     return out
 
 
 def _to_float(value: Any) -> Optional[float]:
     if value is None:
         return None
+
     try:
         return float(value)
     except (TypeError, ValueError):
