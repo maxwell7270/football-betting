@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# Internal league key -> API-Football league id
 LEAGUE_IDS: Dict[str, int] = {
     "premier_league": 39,
     "bundesliga": 78,
@@ -49,16 +48,12 @@ def _get_bool(name: str, default: bool) -> bool:
 
 def _get_list(name: str, default: List[str]) -> List[str]:
     raw = os.getenv(name)
-    if not raw:
+    if raw is None or raw.strip() == "":
         return default
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def current_season(now: datetime | None = None) -> int:
-    """Return the current football season year.
-
-    If current month >= 7 -> current year, otherwise previous year.
-    """
     now = now or datetime.utcnow()
     return now.year if now.month >= 7 else now.year - 1
 
@@ -101,6 +96,7 @@ def load_config() -> Config:
         odds_api_io_base_url=os.getenv(
             "ODDS_API_IO_BASE_URL", "https://api.odds-api.io/v3"
         ),
-        odds_api_io_bookmakers=_get_list("ODDS_API_IO_BOOKMAKERS", ["Bet365"]),
+        # 🔧 FIX: kein Default-Bookmaker mehr
+        odds_api_io_bookmakers=_get_list("ODDS_API_IO_BOOKMAKERS", ["William Hill"]),
         value_min_edge=_get_float("VALUE_MIN_EDGE", 0.02),
     )
