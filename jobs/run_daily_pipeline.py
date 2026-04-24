@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Allow `python jobs/run_daily_pipeline.py` from project root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packages.config import load_config  # noqa: E402
 from packages.logging_utils import configure_logging, get_logger  # noqa: E402
 from packages.models import Fixture, OddsQuote  # noqa: E402
 from packages.providers.odds_api_io import OddsApiIoClient  # noqa: E402
+from packages.services.best_odds_service import compute_best_odds  # noqa: E402
 from packages.services.mock_fixtures_service import get_mock_fixtures  # noqa: E402
 from packages.services.odds_service import OddsService  # noqa: E402
 from packages.services.value_service import analyze_value  # noqa: E402
@@ -48,18 +48,19 @@ def _export_odds_quotes(
     odds_by_fixture: dict[int, list[OddsQuote]],
     fixtures_by_id: dict[int, Fixture],
     tz: ZoneInfo,
-) -> int:
-    """Export all fetched odds, regardless of value-bet status."""
+) -> None:
     rows: list[list[str]] = []
+
     timestamp = datetime.now().isoformat(timespec="seconds")
 
     for fixture_id, quotes in odds_by_fixture.items():
         fx = fixtures_by_id.get(fixture_id)
+
         for q in quotes:
             rows.append([
                 timestamp,
-                str(q.fixture_id),
-                q.league_key,
+                q.fixture_id,
+                fx.league_key if fx else q.league_key,
                 fx.home_team if fx else "",
                 fx.away_team if fx else "",
                 fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M") if fx else "",
@@ -67,11 +68,11 @@ def _export_odds_quotes(
                 q.selection,
                 q.bookmaker,
                 f"{q.odds:.2f}",
-                q.fetched_at_utc.isoformat(),
+                q.fetched_at_utc.isoformat() if q.fetched_at_utc else "",
             ])
 
     if not rows:
-        return 0
+        return
 
     csv_path = Path("data/odds_quotes.csv")
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +96,29 @@ def _export_odds_quotes(
         writer.writerow(header)
         writer.writerows(rows)
 
-    return len(rows)
+
+def _export_best_odds(rows: list[dict]) -> None:
+    if not rows:
+        return
+
+    csv_path = Path("data/best_odds.csv")
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fieldnames = [
+        "fixture_id",
+        "market",
+        "selection",
+        "best_bookmaker",
+        "best_odds",
+        "second_bookmaker",
+        "second_odds",
+        "spread",
+    ]
+
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def main() -> int:
@@ -126,8 +149,11 @@ def main() -> int:
     odds_by_fixture = odds_service.fetch_odds_for_fixtures(fixtures)
 
     total_quotes = 0
+    all_odds: list[OddsQuote] = []
+
     for fx in fixtures:
         quotes = odds_by_fixture.get(fx.fixture_id, [])
+
         if not quotes:
             log.info(
                 "No odds found for fixture_id=%d (%s vs %s)",
@@ -141,17 +167,23 @@ def main() -> int:
             log.info(_format_odds_line(q))
 
         log.info("Fixture_id=%d: %d odds entries", fx.fixture_id, len(quotes))
+
         total_quotes += len(quotes)
+        all_odds.extend(quotes)
 
     log.info("Total odds entries fetched: %d", total_quotes)
 
-    exported_odds = _export_odds_quotes(odds_by_fixture, fixtures_by_id, tz)
-    if exported_odds:
-        log.info("Exported %d odds quote(s) to data/odds_quotes.csv", exported_odds)
-    else:
-        log.info("No odds quotes exported")
+    _export_odds_quotes(odds_by_fixture, fixtures_by_id, tz)
+    if total_quotes:
+        log.info("Exported %d odds quote(s) to data/odds_quotes.csv", total_quotes)
+
+    best_odds = compute_best_odds(all_odds)
+    _export_best_odds(best_odds)
+    if best_odds:
+        log.info("Exported %d best odds row(s) to data/best_odds.csv", len(best_odds))
 
     value_results = analyze_value(odds_by_fixture)
+
     value_rows: list[dict] = []
 
     for fixture_id, analysis in value_results.items():
@@ -186,7 +218,7 @@ def main() -> int:
     if value_rows:
         csv_path = Path("data/value_bets.csv")
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        write_header = not csv_path.exists()
+
         timestamp = datetime.now().isoformat(timespec="seconds")
 
         header = [
@@ -204,14 +236,13 @@ def main() -> int:
             "edge",
         ]
 
-        with csv_path.open("a", encoding="utf-8", newline="") as fh:
+        with csv_path.open("w", encoding="utf-8", newline="") as fh:
             writer = csv.writer(fh)
-
-            if write_header:
-                writer.writerow(header)
+            writer.writerow(header)
 
             for r in value_rows:
                 fx = fixtures_by_id.get(r["fixture_id"])
+
                 writer.writerow([
                     timestamp,
                     r["fixture_id"],
