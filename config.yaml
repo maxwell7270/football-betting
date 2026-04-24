@@ -12,5 +12,5 @@ LEAGUES:
   61: "Ligue 1"
   88: "Eredivisie"
 
-MIN_EDGE: 0.025
+MIN_EDGE: 0.02
 TIMEZONE: "Europe/Zurich"
