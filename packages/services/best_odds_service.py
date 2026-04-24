@@ -21,10 +21,9 @@ def _normalize_bookmaker_name(name: str) -> str:
 def compute_best_odds(odds: list[OddsQuote]) -> list[dict[str, Any]]:
     """Compute best and second-best odds per fixture, market and selection.
 
-    Important:
-    - Provider variants like "Bet365 (no latency)" are treated as "Bet365".
-    - If the same bookmaker appears multiple times for the same selection,
-      only that bookmaker's best quote is kept.
+    Provider variants like "Bet365 (no latency)" are treated as "Bet365".
+    If the same bookmaker appears multiple times for the same selection,
+    only that bookmaker's best quote is kept.
     """
 
     grouped: dict[tuple[int, str, str], dict[str, OddsQuote]] = defaultdict(dict)
@@ -48,14 +47,25 @@ def compute_best_odds(odds: list[OddsQuote]) -> list[dict[str, Any]]:
         )
 
         best_bookmaker, best_quote = sorted_quotes[0]
+
         second_bookmaker = ""
-        second_odds = ""
-        spread = 0.0
+        second_odds_value: float | None = None
 
         if len(sorted_quotes) > 1:
             second_bookmaker, second_quote = sorted_quotes[1]
-            second_odds = f"{second_quote.odds:.2f}"
-            spread = best_quote.odds - second_quote.odds
+            second_odds_value = second_quote.odds
+
+        spread = (
+            best_quote.odds - second_odds_value
+            if second_odds_value is not None
+            else 0.0
+        )
+
+        spread_pct = (
+            (best_quote.odds / second_odds_value) - 1
+            if second_odds_value and second_odds_value > 0
+            else 0.0
+        )
 
         rows.append(
             {
@@ -65,8 +75,9 @@ def compute_best_odds(odds: list[OddsQuote]) -> list[dict[str, Any]]:
                 "best_bookmaker": best_bookmaker,
                 "best_odds": f"{best_quote.odds:.2f}",
                 "second_bookmaker": second_bookmaker,
-                "second_odds": second_odds,
+                "second_odds": f"{second_odds_value:.2f}" if second_odds_value else "",
                 "spread": f"{spread:.2f}",
+                "spread_pct": f"{spread_pct:.4f}",
             }
         )
 

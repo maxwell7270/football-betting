@@ -50,26 +50,29 @@ def _export_odds_quotes(
     tz: ZoneInfo,
 ) -> None:
     rows: list[list[str]] = []
-
     timestamp = datetime.now().isoformat(timespec="seconds")
 
     for fixture_id, quotes in odds_by_fixture.items():
         fx = fixtures_by_id.get(fixture_id)
 
         for q in quotes:
-            rows.append([
-                timestamp,
-                q.fixture_id,
-                fx.league_key if fx else q.league_key,
-                fx.home_team if fx else "",
-                fx.away_team if fx else "",
-                fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M") if fx else "",
-                q.market,
-                q.selection,
-                q.bookmaker,
-                f"{q.odds:.2f}",
-                q.fetched_at_utc.isoformat() if q.fetched_at_utc else "",
-            ])
+            rows.append(
+                [
+                    timestamp,
+                    q.fixture_id,
+                    fx.league_key if fx else q.league_key,
+                    fx.home_team if fx else "",
+                    fx.away_team if fx else "",
+                    fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+                    if fx
+                    else "",
+                    q.market,
+                    q.selection,
+                    q.bookmaker,
+                    f"{q.odds:.2f}",
+                    q.fetched_at_utc.isoformat() if q.fetched_at_utc else "",
+                ]
+            )
 
     if not rows:
         return
@@ -113,6 +116,7 @@ def _export_best_odds(rows: list[dict]) -> None:
         "second_bookmaker",
         "second_odds",
         "spread",
+        "spread_pct",
     ]
 
     with csv_path.open("w", encoding="utf-8", newline="") as fh:
@@ -131,6 +135,7 @@ def main() -> int:
         return 1
 
     tz = _resolve_tz(config.timezone)
+
     log.info(
         "Starting daily pipeline (dev/mock) | bookmakers=%s tz=%s",
         ",".join(config.odds_api_io_bookmakers) or "(none)",
@@ -141,6 +146,7 @@ def main() -> int:
     fixtures_by_id = {fx.fixture_id: fx for fx in fixtures}
 
     log.info("Loaded %d mock fixtures", len(fixtures))
+
     for fx in sorted(fixtures, key=lambda f: f.kickoff_utc):
         log.info(_format_fixture_line(fx, tz))
 
@@ -174,16 +180,17 @@ def main() -> int:
     log.info("Total odds entries fetched: %d", total_quotes)
 
     _export_odds_quotes(odds_by_fixture, fixtures_by_id, tz)
+
     if total_quotes:
         log.info("Exported %d odds quote(s) to data/odds_quotes.csv", total_quotes)
 
     best_odds = compute_best_odds(all_odds)
     _export_best_odds(best_odds)
+
     if best_odds:
         log.info("Exported %d best odds row(s) to data/best_odds.csv", len(best_odds))
 
     value_results = analyze_value(odds_by_fixture)
-
     value_rows: list[dict] = []
 
     for fixture_id, analysis in value_results.items():
@@ -202,15 +209,17 @@ def main() -> int:
                 entry["edge"],
             )
 
-            value_rows.append({
-                "fixture_id": fixture_id,
-                "market": analysis["market"],
-                "bookmaker": entry["bookmaker"],
-                "selection": entry["selection"],
-                "odds": entry["odds"],
-                "fair_odds": entry["fair_odds"],
-                "edge": entry["edge"],
-            })
+            value_rows.append(
+                {
+                    "fixture_id": fixture_id,
+                    "market": analysis["market"],
+                    "bookmaker": entry["bookmaker"],
+                    "selection": entry["selection"],
+                    "odds": entry["odds"],
+                    "fair_odds": entry["fair_odds"],
+                    "edge": entry["edge"],
+                }
+            )
 
     if not value_rows:
         log.info("No 1x2 value bets found")
@@ -243,20 +252,24 @@ def main() -> int:
             for r in value_rows:
                 fx = fixtures_by_id.get(r["fixture_id"])
 
-                writer.writerow([
-                    timestamp,
-                    r["fixture_id"],
-                    fx.league_key if fx else "",
-                    fx.home_team if fx else "",
-                    fx.away_team if fx else "",
-                    fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M") if fx else "",
-                    r["market"],
-                    r["bookmaker"],
-                    r["selection"],
-                    f"{r['odds']:.2f}",
-                    f"{r['fair_odds']:.2f}",
-                    f"{r['edge']:.4f}",
-                ])
+                writer.writerow(
+                    [
+                        timestamp,
+                        r["fixture_id"],
+                        fx.league_key if fx else "",
+                        fx.home_team if fx else "",
+                        fx.away_team if fx else "",
+                        fx.kickoff_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+                        if fx
+                        else "",
+                        r["market"],
+                        r["bookmaker"],
+                        r["selection"],
+                        f"{r['odds']:.2f}",
+                        f"{r['fair_odds']:.2f}",
+                        f"{r['edge']:.4f}",
+                    ]
+                )
 
         log.info("Exported %d value bet(s) to data/value_bets.csv", len(value_rows))
 
